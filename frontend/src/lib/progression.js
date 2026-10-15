@@ -224,6 +224,9 @@ export function plannedOf(cfg) {
   // Triple progression's set ceiling is part of the plan: raising it changes where a cycle ends.
   if (mode === 'reps' && c.setsMax > 0) out.setsMax = c.setsMax
   if (c.weight != null) out.weight = c.weight
+  // A percentage-of-training-max plan carries its own load block, so a later build can tell
+  // that this weight came from the TM and not from a typed plate count.
+  if (c.load) out.load = c.load
   return out
 }
 // Work with no load to enter climbs in reps, then sets, when it is logged at 0: a bodyweight

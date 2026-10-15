@@ -6,6 +6,7 @@
 import { buildSets, applyIntensifierPlan, modeOf, barFloor } from './history.js'
 import { isWarmupRow } from './workout-model.js'
 import { nextPrescription, applyPrescription, defaultIncrement, weightIncrement, plannedOf } from './progression.js'
+import { resolveLoadCfg } from './training-max.js'
 import { dropGrid } from './plates.js'
 import { backoffStepOf, applyBackoff } from './backoff.js'
 import { dbLoadFor, historyAs, ownedWeightsFor } from './dumbbells.js'
@@ -28,6 +29,9 @@ export const startsFromLast = st => st?.startFrom === 'last'
  * `noProg` builds the routine's own numbers with no prescription, as an excluded routine does.
  */
 export function buildPlannedEntry(stored, cfg, routine, { noProg = false } = {}) {
+  // Resolve a percentage-of-training-max plan entry to an absolute weight before anything else
+  // reads the routine's target (lib/training-max.js).
+  cfg = resolveLoadCfg(cfg, stored)
   // What a dumbbell weight means for this exercise today (lib/dumbbells.js): the history it
   // progresses from is read in that meaning, so a switch from "40 total" to per bell opens at
   // 20, not at 40 a hand. Only a switch between the two explicit meanings converts anything.

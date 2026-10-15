@@ -37,6 +37,7 @@ import { estimate1RM, best1RM, is1RMRecord, REP_CAP, formulaOf, FORMULA_NAMES } 
 import { exerciseHistory } from './lib/exercise-history.js'
 import { isBellEx, dbLoadOf, dbLoadFor, withDbLoad, withMeaning, historyAs, entryDbLoad, currentDbLoad, isOneArm, ownedWeightsFor, dumbbellsOf, ownsDumbbells, withDumbbells, presetWeights, cleanWeights } from './lib/dumbbells.js'
 import { policyFor, defaultIncrement, POLICIES_FOR, POLICY_NAME, POLICY_DESC, MAX_BW_SETS, MAX_TRIPLE_SETS, weightIncrement } from './lib/progression.js'
+import { resolveLoadWeight } from './lib/training-max.js'
 import { normalizeRepRange } from './lib/rep-range.js'
 import { isBackoff, backoffWeights } from './lib/backoff.js'
 import { isPyramid, normalizePyramid, normalizePyramidRest, normalizePyramidWeight, pyramidFromFlat, flatFromPyramid, pyramidLabel, PYRAMID_MAX, MAX_PYRAMID_SETS, PYRAMID_PRESETS } from './lib/pyramid.js'
@@ -1684,13 +1685,18 @@ function ExConfig({ ex, existing, onSave, onDelete, onReplace, close, routine, i
     close()
     const sets = Math.max(1, Math.round(c.sets) || (cardio ? 1 : 3))
     // Only carry progression settings that differ from the inherited default, so a plan file
-    // stays readable and "follow the routine" keeps meaning exactly that.
+    // stays readable and "follow the routine" keeps meaning exactly that. A percentage-loaded
+    // exercise moves with its training max, not with hit/miss progression, so it carries no
+    // progression settings of its own (lib/training-max.js).
+    const isPctLoad = c.load && c.load.type === 'pct_tm'
     const prog = {}
-    if (c.prog) prog.prog = c.prog
-    if (c.inc > 0) prog.inc = c.inc
+    if (!isPctLoad) {
+      if (c.prog) prog.prog = c.prog
+      if (c.inc > 0) prog.inc = c.inc
+    }
     // Epley deloading is configurable per occurrence, but the default stays omitted so older
     // plans retain their compact shape and keep the existing 90% behaviour.
-    if (mode === 'reps' && !bw && (activePolicy === 'linear' || climbsRange(activePolicy))) {
+    if (mode === 'reps' && !bw && !isPctLoad && (activePolicy === 'linear' || climbsRange(activePolicy))) {
       const deloadFactor = Math.max(0.5, Math.min(0.95, Number(c.deloadFactor) || 0.9))
       if (deloadFactor !== 0.9) prog.deloadFactor = deloadFactor
     }
@@ -1722,8 +1728,11 @@ function ExConfig({ ex, existing, onSave, onDelete, onReplace, close, routine, i
     const withMeant = dbLoad ? { dbLoad } : {}
     // "Last set to failure": written only when on, so a plan that never asked keeps its shape.
     const withFailure = c.lastToFailure === true ? { lastToFailure: true } : {}
-    if (cardio) onSave({ sets, min: Math.max(1, Math.round(c.min) || 20), speed: Math.max(0, c.speed || 8), ...withNote, ...withRest })
-    else if (mode === 'time') onSave({ sets, mode: 'time', sec: Math.max(1, Math.round(c.sec) || 45), weight: Math.max(0, c.weight || 0), ...flags, ...(perSide ? { side: true } : {}), ...prog, ...withNote, ...withWarmups, ...withRest, ...withMeant, ...withFailure })
+    const withLoad = isPctLoad ? { load: c.load } : {}
+    const resolvedLoadWeight = isPctLoad ? resolveLoadWeight(c, st) : null
+    const savedWeight = isPctLoad && resolvedLoadWeight != null ? resolvedLoadWeight : Math.max(0, c.weight || 0)
+    if (cardio) onSave({ sets, min: Math.max(1, Math.round(c.min) || 20), speed: Math.max(0, c.speed || 8), ...withNote, ...withRest, ...withLoad })
+    else if (mode === 'time') onSave({ sets, mode: 'time', sec: Math.max(1, Math.round(c.sec) || 45), weight: savedWeight, ...flags, ...(perSide ? { side: true } : {}), ...prog, ...withNote, ...withWarmups, ...withRest, ...withMeant, ...withFailure, ...withLoad })
     else {
       // A unilateral target is stored even: the split has to divide, and a typed 15 would
       // otherwise plan seven reps on one side and eight on the other, every session.
@@ -1735,7 +1744,7 @@ function ExConfig({ ex, existing, onSave, onDelete, onReplace, close, routine, i
         range = normalizeRepRange(reps, c.repsMin, stride)
         reps = range.reps
       }
-      const out = { sets, mode: 'reps', reps, weight: Math.max(0, c.weight || 0), ...flags, ...(perSide ? { side: true } : {}), ...prog, ...withNote, ...withWarmups, ...withRest, ...withMeant }
+      const out = { sets, mode: 'reps', reps, weight: savedWeight, ...flags, ...(perSide ? { side: true } : {}), ...prog, ...withNote, ...withWarmups, ...withRest, ...withMeant, ...withLoad }
       // The list is the prescription; sets and reps follow it, so everything that reads the
       // flat target (a config sheet reopened with the toggle off, older builds) still makes sense.
       const list = pyramid ? normalizePyramid(c.pyramid, stride) : []
@@ -1889,6 +1898,23 @@ function ExConfig({ ex, existing, onSave, onDelete, onReplace, close, routine, i
     <div className="small dim" style={{ marginBottom: 18 }}>
       {t('Rest after each set of this exercise. 0:00 means your default rest.')}
     </div>
+    {/* Percentage of training max loading (load as %, issue #153): the working weight is
+        derived from the training max typed here, so a 5/3/1-style lift can be planned at 75%
+        and the weight follows the max without re-entering it every session. */}
+    {!cardio && mode !== 'time' && !pyramid && <div className="sect-b" style={{ marginBottom: 8 }}>
+      <Row icon="gauge" iconTint="var(--acc)" title={t('Use % of training max')}
+        subtitle={c.load?.type === 'pct_tm' ? t('Weight: {0} {1} ({2}% of {3} {4}).', resolveLoadWeight(c, st) ?? c.weight, st.unit, c.load.value, c.load.tm, st.unit) : t('Plan the working weight as a share of a training max.')}>
+        <Switch checked={c.load?.type === 'pct_tm'} onChange={v => setC(x => v
+          ? { ...x, load: { type: 'pct_tm', tm: Math.max(0, x.weight) || 100, value: 75 } }
+          : { ...x, load: undefined })} />
+      </Row>
+      {c.load?.type === 'pct_tm' && <div className="row cfgrow" style={{ marginBottom: 8 }}>
+        <Stepper label={t('Training max ({0})', st.unit)} value={c.load.tm} step={2.5}
+          onChange={v => setC(x => ({ ...x, load: { ...x.load, tm: Math.max(0, v) } }))} />
+        <Stepper label={t('Load (%)')} value={c.load.value} step={5} min={1} max={200} decimal={false}
+          onChange={v => setC(x => ({ ...x, load: { ...x.load, value: Math.max(1, v) } }))} />
+      </div>}
+    </div>}
     {/* ---------- bodyweight + per side (issues #31/#32/#33) ---------- */}
     {!cardio && <div className="sect-b" style={{ marginBottom: 8 }}>
       <Row icon="figureStrength" iconTint="var(--acc)" title={t('Bodyweight')}
