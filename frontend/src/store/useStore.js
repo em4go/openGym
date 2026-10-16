@@ -218,6 +218,7 @@ export const DEF = {
   // weight; 'last' carries the reps over from the last session, the way it always worked before.
   // Absent reads as 'plan' too, which is what the MCP bridge sees on a raw state file.
   startFrom: 'plan',
+  program: null,
   // Per-language choice for translated exercise names: whether the original English name is
   // shown in parentheses next to the translation. Map { '<lang>': boolean }; a missing key
   // (any profile written before this setting existed) reads as shown.
